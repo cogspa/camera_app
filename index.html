@@ -3,85 +3,119 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Face Tracking App</title>
-    <script type="module" src="./main.js"></script>
+    <title>Face and Hand Tracking with Custom Overlays</title>
     <style>
         body {
             margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
+            padding: 20px;
             background: #1a1a1a;
             color: white;
-        }
-        .camera-select {
-            margin-bottom: 20px;
-            padding: 8px 16px;
-            font-size: 16px;
-            background: #2a2a2a;
-            color: white;
-            border: 1px solid #444;
-            border-radius: 8px;
-            cursor: pointer;
-            width: 300px;
-            outline: none;
-            transition: all 0.3s ease;
-        }
-        .camera-select:hover {
-            background: #333;
-            border-color: #666;
-        }
-        .camera-select:focus {
-            border-color: #0088ff;
-            box-shadow: 0 0 0 2px rgba(0,136,255,0.2);
-        }
-        .camera-select option {
-            background: #2a2a2a;
-            color: white;
-            padding: 8px;
+            font-family: Arial, sans-serif;
         }
         .container {
             position: relative;
-            width: 640px;
-            height: 480px;
-            border: 2px solid #333;
+            width: fit-content;
+            margin: 0 auto;
+        }
+        #video {
+            transform: scaleX(-1);
+        }
+        #canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        .controls {
+            margin: 20px 0;
+            padding: 20px;
+            background: #2a2a2a;
             border-radius: 8px;
-            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            max-width: 640px;
+            margin: 20px auto;
         }
-        video {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-        canvas {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-        }
-        .status {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 10px 20px;
-            background: rgba(0, 0, 0, 0.7);
+        .camera-select {
+            padding: 8px;
+            background: #333;
+            color: white;
+            border: 1px solid #444;
             border-radius: 4px;
-            z-index: 1000;
+            cursor: pointer;
+        }
+        .upload-section {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .upload-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        label {
+            min-width: 120px;
+        }
+        .preview-image {
+            max-width: 100px;
+            max-height: 100px;
+            display: none;
+            margin-left: 10px;
+        }
+        #status {
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #333;
+            border-radius: 4px;
+        }
+        input[type="file"] {
+            padding: 8px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: white;
+        }
+        input[type="number"] {
+            width: 60px;
+            padding: 4px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: white;
         }
     </style>
 </head>
 <body>
-    <select id="cameraSelect" class="camera-select">
-        <option value="">Loading cameras...</option>
-    </select>
-    <div class="status" id="status">Initializing camera...</div>
+    <div class="controls">
+        <select id="cameraSelect" class="camera-select">
+            <option value="">Loading cameras...</option>
+        </select>
+        
+        <div class="upload-section">
+            <div class="upload-row">
+                <label>Face Overlay:</label>
+                <input type="file" id="faceOverlayUpload" accept="image/*">
+                <img id="facePreview" class="preview-image">
+                <input type="number" id="faceScale" value="1.0" step="0.1" min="0.1" max="5.0">
+            </div>
+            <div class="upload-row">
+                <label>Hand Overlay:</label>
+                <input type="file" id="handOverlayUpload" accept="image/*">
+                <img id="handPreview" class="preview-image">
+                <input type="number" id="handScale" value="1.0" step="0.1" min="0.1" max="5.0">
+            </div>
+        </div>
+        
+        <div id="status">Loading...</div>
+    </div>
+    
     <div class="container">
-        <video id="video" playsinline autoplay></video>
+        <video id="video" playsinline></video>
         <canvas id="canvas"></canvas>
     </div>
+    
+    <script type="module" src="/main.js"></script>
 </body>
 </html>
