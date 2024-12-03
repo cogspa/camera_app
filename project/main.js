@@ -1,18 +1,318 @@
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-webgl';
 import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
+import * as handPoseDetection from '@tensorflow-models/hand-pose-detection';
 
 let detector = null;
+let handDetector = null;
 let video = null;
 let canvas = null;
 let ctx = null;
 let isTracking = false;
-let currentStream = null;
+let currentStream;
 
-function updateStatus(message) {
-    const status = document.getElementById('status');
-    status.textContent = message;
+// Overlay images
+let faceOverlay = null;
+let handOverlay = null;
+let faceScale = 1.0;
+let handScale = 1.0;
+
+// Add rate limiting variables
+let lastDetectionTime = 0;
+const DETECTION_INTERVAL = 50; // Minimum milliseconds between detections
+
+// Add offset variables
+let faceOffsetX = 0;
+let faceOffsetY = 0;
+let handOffsetX = 0;
+let handOffsetY = 0;
+
+// Setup image upload handlers
+function setupImageUploads() {
+    const faceInput = document.getElementById('faceOverlayUpload');
+    const handInput = document.getElementById('handOverlayUpload');
+    const facePreview = document.getElementById('facePreview');
+    const handPreview = document.getElementById('handPreview');
+    const faceScaleInput = document.getElementById('faceScale');
+    const handScaleInput = document.getElementById('handScale');
+
+    faceInput.addEventListener('change', async (e) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            await new Promise(resolve => img.onload = resolve);
+            faceOverlay = img;
+            facePreview.src = img.src;
+            facePreview.style.display = 'block';
+        }
+    });
+
+    handInput.addEventListener('change', async (e) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            await new Promise(resolve => img.onload = resolve);
+            handOverlay = img;
+            handPreview.src = img.src;
+            handPreview.style.display = 'block';
+        }
+    });
+
+    faceScaleInput.addEventListener('input', (e) => {
+        faceScale = parseFloat(e.target.value);
+    });
+
+    handScaleInput.addEventListener('input', (e) => {
+        handScale = parseFloat(e.target.value);
+    });
 }
+
+function drawImageOnLandmarks(img, landmarks, scale, offsetX = 0, offsetY = 0) {
+    if (!img || !landmarks || landmarks.length < 2) return;
+
+    // Calculate bounding box
+    let minX = Infinity, minY = Infinity;
+    let maxX = -Infinity, maxY = -Infinity;
+
+    landmarks.forEach(point => {
+        // Flip X coordinate since video is mirrored
+        const x = canvas.width - point.x;
+        const y = point.y;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    });
+
+    const width = (maxX - minX) * scale;
+    const height = (maxY - minY) * scale;
+    const centerX = (minX + maxX) / 2 + offsetX;  // Apply X offset
+    const centerY = (minY + maxY) / 2 + offsetY;  // Apply Y offset
+
+    // Save current context state
+    ctx.save();
+    
+    // Scale and draw the image
+    ctx.translate(centerX, centerY);
+    ctx.scale(-1, 1); // Mirror the image horizontally
+    ctx.drawImage(
+        img,
+        -width / 2,
+        -height / 2,
+        width,
+        height
+    );
+    
+    // Restore context state
+    ctx.restore();
+}
+
+async function detectHands() {
+    if (!handDetector || !video || !isTracking) return;
+    
+    try {
+        const hands = await handDetector.estimateHands(video, {
+            flipHorizontal: false // Changed to false since we handle flipping manually
+        });
+        
+        if (hands.length > 0) {
+            hands.forEach(hand => {
+                // Draw hand landmarks
+                ctx.fillStyle = '#00FFFF';
+                ctx.strokeStyle = '#00FFFF';
+                ctx.lineWidth = 2;
+                
+                // Draw keypoints
+                hand.keypoints.forEach(point => {
+                    ctx.beginPath();
+                    ctx.arc(point.x, point.y, 3, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+                
+                // Draw connections
+                const fingers = [
+                    [0, 1, 2, 3, 4],          // thumb
+                    [0, 5, 6, 7, 8],          // index finger
+                    [0, 9, 10, 11, 12],       // middle finger
+                    [0, 13, 14, 15, 16],      // ring finger
+                    [0, 17, 18, 19, 20]       // pinky
+                ];
+                
+                fingers.forEach(finger => {
+                    ctx.beginPath();
+                    finger.forEach((pointIndex, i) => {
+                        const point = hand.keypoints[pointIndex];
+                        if (i === 0) {
+                            ctx.moveTo(point.x, point.y);
+                        } else {
+                            ctx.lineTo(point.x, point.y);
+                        }
+                    });
+                    ctx.stroke();
+                });
+            });
+        }
+    } catch (error) {
+        console.error('Error during hand detection:', error);
+    }
+}
+
+async function detectFaces() {
+    if (!detector || !video || !isTracking) return;
+    
+    try {
+        // Rate limiting
+        const now = Date.now();
+        if (now - lastDetectionTime < DETECTION_INTERVAL) {
+            requestAnimationFrame(detectFaces);
+            return;
+        }
+        lastDetectionTime = now;
+
+        if (video.readyState !== 4) {
+            requestAnimationFrame(detectFaces);
+            return;
+        }
+
+        // Memory cleanup
+        if (tf.memory().numTensors > 1000) {
+            tf.disposeVariables();
+            await tf.ready();
+        }
+
+        const predictions = await detector.estimateFaces(video, {
+            flipHorizontal: false,
+            staticImageMode: false,
+            predictIrises: false
+        });
+        
+        // Dispose of tensors after each detection
+        tf.tidy(() => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (predictions.length > 0) {
+                predictions.forEach(prediction => {
+                    const keypoints = prediction.keypoints;
+                    
+                    if (faceOverlay) {
+                        drawImageOnLandmarks(faceOverlay, keypoints, faceScale, faceOffsetX, faceOffsetY);
+                    } else {
+                        ctx.save();
+                        ctx.scale(-1, 1);
+                        ctx.translate(-canvas.width, 0);
+                        
+                        ctx.fillStyle = '#00FF00';
+                        ctx.strokeStyle = '#00FF00';
+                        ctx.lineWidth = 1.5;
+                        
+                        keypoints.forEach(point => {
+                            ctx.beginPath();
+                            ctx.arc(point.x, point.y, 2.5, 0, 2 * Math.PI);
+                            ctx.fill();
+                        });
+                        
+                        ctx.restore();
+                    }
+                });
+            }
+            
+            // Hand detection with rate limiting
+            if (now - lastDetectionTime >= DETECTION_INTERVAL) {
+                handDetector.estimateHands(video, {
+                    flipHorizontal: false
+                }).then(hands => {
+                    if (hands.length > 0) {
+                        hands.forEach(hand => {
+                            if (handOverlay) {
+                                drawImageOnLandmarks(handOverlay, hand.keypoints, handScale, handOffsetX, handOffsetY);
+                            } else {
+                                ctx.save();
+                                ctx.scale(-1, 1);
+                                ctx.translate(-canvas.width, 0);
+                                
+                                ctx.fillStyle = '#00FFFF';
+                                ctx.strokeStyle = '#00FFFF';
+                                ctx.lineWidth = 2;
+                                
+                                hand.keypoints.forEach(point => {
+                                    ctx.beginPath();
+                                    ctx.arc(point.x, point.y, 3, 0, 2 * Math.PI);
+                                    ctx.fill();
+                                });
+                                
+                                ctx.restore();
+                            }
+                        });
+                    }
+                });
+            }
+        });
+        
+        if (isTracking) {
+            requestAnimationFrame(detectFaces);
+        }
+    } catch (error) {
+        console.error('Error during detection:', error);
+        updateStatus('Error during detection: ' + error.message);
+        // Add delay before retry on error
+        if (isTracking) {
+            setTimeout(detectFaces, 1000);
+        }
+    }
+}
+
+function startTracking() {
+    if (!isTracking) {
+        isTracking = true;
+        console.log('Starting face tracking');
+        try {
+            detectFaces();
+        } catch (error) {
+            console.error('Error starting tracking:', error);
+            updateStatus('Error starting tracking: ' + error.message);
+        }
+    }
+}
+
+async function init() {
+    try {
+        await tf.setBackend('webgl');
+        console.log('TensorFlow.js backend initialized:', tf.getBackend());
+        
+        await setupCamera();
+        console.log('Camera setup complete');
+        
+        canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
+        const WIDTH = 640;
+        const HEIGHT = 480;
+        video.width = WIDTH;
+        video.height = HEIGHT;
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        
+        await setupCanvas();
+        console.log('Canvas setup complete');
+        
+        setupImageUploads();
+        setupOffsetControls();
+        console.log('Image upload handlers setup');
+        
+        await setupFaceDetector();
+        await initHandDetector();
+        console.log('Face and hand detectors setup complete');
+        
+        startTracking();
+    } catch (error) {
+        console.error('Initialization error:', error);
+        updateStatus('Error: ' + error.message);
+    }
+}
+
+// Start the application when the page loads
+window.addEventListener('load', init);
 
 async function getConnectedCameras() {
     try {
@@ -133,8 +433,8 @@ async function setupCanvas() {
         canvas.style.left = '0';
         canvas.style.top = '0';
         
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1); // Mirror the context horizontally
+        // Reset any previous transformations
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         
         updateStatus('Canvas setup complete');
     } catch (error) {
@@ -161,7 +461,7 @@ async function setupFaceDetector() {
         updateStatus('Face detection ready');
         
         // Start tracking immediately after setup
-        startTracking();
+        // startTracking();
     } catch (error) {
         console.error('Error loading face detector:', error);
         updateStatus('Error: Could not load face detector - ' + error.message);
@@ -169,132 +469,70 @@ async function setupFaceDetector() {
     }
 }
 
-async function detectFaces() {
-    if (!detector || !video || !isTracking) return;
-    
+async function initHandDetector() {
     try {
-        // Make sure video is playing and ready
-        if (video.readyState !== 4) {
-            requestAnimationFrame(detectFaces);
-            return;
-        }
-
-        // Get the predictions
-        const predictions = await detector.estimateFaces(video, {
-            flipHorizontal: false,
-            staticImageMode: false,
-            predictIrises: false
-        });
-        
-        // Clear previous drawings
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // Save the current transformation matrix
-        ctx.save();
-        
-        // Draw the face mesh
-        if (predictions.length > 0) {
-            predictions.forEach(prediction => {
-                const keypoints = prediction.keypoints;
-                
-                // Draw points
-                ctx.fillStyle = '#00FF00';
-                ctx.strokeStyle = '#00FF00';
-                ctx.lineWidth = 1;
-                
-                keypoints.forEach(point => {
-                    ctx.beginPath();
-                    ctx.arc(point.x, point.y, 2, 0, 2 * Math.PI);
-                    ctx.fill();
-                });
-                
-                // Draw face contours
-                const contours = [
-                    keypoints.slice(0, 17),    // Jaw
-                    keypoints.slice(17, 22),   // Left eyebrow
-                    keypoints.slice(22, 27),   // Right eyebrow
-                    keypoints.slice(36, 42),   // Left eye
-                    keypoints.slice(42, 48),   // Right eye
-                    keypoints.slice(48, 60)    // Mouth outer
-                ];
-                
-                contours.forEach(contour => {
-                    ctx.beginPath();
-                    contour.forEach((point, i) => {
-                        if (i === 0) {
-                            ctx.moveTo(point.x, point.y);
-                        } else {
-                            ctx.lineTo(point.x, point.y);
-                        }
-                    });
-                    if (contour === contours[0]) { // Close the jaw line
-                        ctx.closePath();
-                    }
-                    ctx.stroke();
-                });
-            });
-            updateStatus('Face detected');
-        } else {
-            updateStatus('No face detected - try adjusting your position');
-        }
-        
-        // Restore the transformation matrix
-        ctx.restore();
-        
-        if (isTracking) {
-            requestAnimationFrame(detectFaces);
-        }
+        const model = handPoseDetection.SupportedModels.MediaPipeHands;
+        const detectorConfig = {
+            runtime: 'tfjs',
+            modelType: 'full',  // Use full model for better accuracy
+            maxHands: 2,
+            scoreThreshold: 0.5,  // Lower threshold for more sensitive detection
+            refineLandmarks: true  // Enable landmark refinement for better precision
+        };
+        handDetector = await handPoseDetection.createDetector(model, detectorConfig);
+        updateStatus('Hand detector initialized');
     } catch (error) {
-        console.error('Error during face detection:', error);
-        updateStatus('Error during face detection: ' + error.message);
-        // Try to recover
-        if (isTracking) {
-            setTimeout(detectFaces, 1000);
-        }
+        console.error('Error initializing hand detector:', error);
+        updateStatus('Error: Hand detector initialization failed');
     }
 }
 
-function startTracking() {
-    if (!isTracking) {
-        isTracking = true;
-        console.log('Starting face tracking');
-        try {
-            detectFaces();
-        } catch (error) {
-            console.error('Error starting tracking:', error);
-            updateStatus('Error starting tracking: ' + error.message);
-        }
-    }
+function updateStatus(message) {
+    const status = document.getElementById('status');
+    status.textContent = message;
 }
 
-async function init() {
-    try {
-        updateStatus('Initializing...');
-        await tf.setBackend('webgl');
-        console.log('TensorFlow.js backend initialized:', tf.getBackend());
-        
-        await setupCamera();
-        console.log('Camera setup complete');
-        
-        canvas = document.getElementById('canvas');
-        ctx = canvas.getContext('2d');
-        const WIDTH = 640;
-        const HEIGHT = 480;
-        video.width = WIDTH;
-        video.height = HEIGHT;
-        canvas.width = WIDTH;
-        canvas.height = HEIGHT;
-        
-        await setupCanvas();
-        console.log('Canvas setup complete');
-        
-        await setupFaceDetector();
-        console.log('Face detector setup complete');
-    } catch (error) {
-        console.error('Initialization error:', error);
-        updateStatus('Error: ' + error.message);
+// Add cleanup function
+function cleanup() {
+    isTracking = false;
+    if (detector) {
+        detector.dispose();
     }
+    if (handDetector) {
+        handDetector.dispose();
+    }
+    tf.disposeVariables();
 }
 
-// Start the application when the page loads
-window.addEventListener('load', init);
+// Call cleanup when stopping tracking
+function stopTracking() {
+    isTracking = false;
+    cleanup();
+    updateStatus('Tracking stopped');
+}
+
+// Add event listener for page unload
+window.addEventListener('unload', cleanup);
+
+function setupOffsetControls() {
+    const faceOffsetXInput = document.getElementById('faceOffsetX');
+    const faceOffsetYInput = document.getElementById('faceOffsetY');
+    const handOffsetXInput = document.getElementById('handOffsetX');
+    const handOffsetYInput = document.getElementById('handOffsetY');
+
+    faceOffsetXInput.addEventListener('input', (e) => {
+        faceOffsetX = parseInt(e.target.value) || 0;
+    });
+
+    faceOffsetYInput.addEventListener('input', (e) => {
+        faceOffsetY = parseInt(e.target.value) || 0;
+    });
+
+    handOffsetXInput.addEventListener('input', (e) => {
+        handOffsetX = parseInt(e.target.value) || 0;
+    });
+
+    handOffsetYInput.addEventListener('input', (e) => {
+        handOffsetY = parseInt(e.target.value) || 0;
+    });
+}
