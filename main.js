@@ -29,13 +29,36 @@ async function populateCameraSelect() {
     const cameraSelect = document.getElementById('cameraSelect');
     const cameras = await getConnectedCameras();
     
-    cameraSelect.innerHTML = cameras.length === 0 
-        ? '<option value="">No cameras found</option>'
-        : cameras.map(camera => 
-            `<option value="${camera.deviceId}">${camera.label || `Camera ${camera.deviceId.slice(0, 8)}`}</option>`
-        ).join('');
+    // Clear existing options
+    cameraSelect.innerHTML = '';
     
-    cameraSelect.addEventListener('change', () => switchCamera(cameraSelect.value));
+    if (cameras.length === 0) {
+        cameraSelect.innerHTML = '<option value="">No cameras found</option>';
+        return;
+    }
+
+    // Add cameras to select
+    cameras.forEach(camera => {
+        const option = document.createElement('option');
+        option.value = camera.deviceId;
+        option.text = camera.label || `Camera ${camera.deviceId.slice(0, 8)}`;
+        cameraSelect.appendChild(option);
+        
+        // Auto-select Logitech C615 if found
+        if (option.text.includes('C615')) {
+            option.selected = true;
+            // Trigger camera switch
+            switchCamera(camera.deviceId);
+        }
+    });
+
+    // Add change event listener
+    cameraSelect.addEventListener('change', (e) => {
+        const selectedDeviceId = e.target.value;
+        if (selectedDeviceId) {
+            switchCamera(selectedDeviceId);
+        }
+    });
 }
 
 async function switchCamera(deviceId) {
@@ -49,14 +72,20 @@ async function switchCamera(deviceId) {
         const constraints = {
             video: {
                 deviceId: deviceId ? { exact: deviceId } : undefined,
-                width: 640,
-                height: 480
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: 30 }
             }
         };
         
         currentStream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = currentStream;
         updateStatus('Camera switched successfully');
+        
+        // Ensure video element is properly configured
+        video.onloadedmetadata = () => {
+            video.play();
+        };
     } catch (error) {
         console.error('Error switching camera:', error);
         updateStatus('Error: Could not switch camera');
@@ -93,14 +122,28 @@ async function setupCamera() {
     });
 }
 
-function setupCanvas() {
-    canvas = document.getElementById('canvas');
-    canvas.width = 640;
-    canvas.height = 480;
-    ctx = canvas.getContext('2d');
-    // Mirror the canvas to match video
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+async function setupCanvas() {
+    try {
+        // Match canvas size to video
+        canvas.width = video.width;
+        canvas.height = video.height;
+        
+        // Set canvas on top of video
+        canvas.style.position = 'absolute';
+        canvas.style.left = '0';
+        canvas.style.top = '0';
+        
+        // Reset any previous transformations
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Mirror horizontally only
+        ctx.scale(-1, 1);
+        ctx.translate(-canvas.width, 0);
+        
+        updateStatus('Canvas setup complete');
+    } catch (error) {
+        console.error('Error setting up canvas:', error);
+        updateStatus('Error: Canvas setup failed');
+    }
 }
 
 async function setupFaceDetector() {
@@ -110,59 +153,22 @@ async function setupFaceDetector() {
         const detectorConfig = {
             runtime: 'tfjs',
             maxFaces: 1,
-            refineLandmarks: true,
+            refineLandmarks: false,
+            shouldLoadIrisModel: false,
+            enableFaceGeometry: false
         };
+        
+        console.log('Creating face detector with config:', detectorConfig);
         detector = await faceLandmarksDetection.createDetector(model, detectorConfig);
+        console.log('Face detector created successfully');
         updateStatus('Face detection ready');
-        console.log('Face detector loaded successfully');
+        
+        // Start tracking immediately after setup
+        startTracking();
     } catch (error) {
         console.error('Error loading face detector:', error);
-        updateStatus('Error: Could not load face detector');
+        updateStatus('Error: Could not load face detector - ' + error.message);
         throw error;
-    }
-}
-
-function drawFaceMesh(predictions) {
-    if (!ctx) return;
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    if (predictions.length > 0) {
-        predictions.forEach(prediction => {
-            const keypoints = prediction.keypoints;
-            
-            // Draw dots for each landmark
-            ctx.fillStyle = '#00FF00';
-            keypoints.forEach(keypoint => {
-                ctx.beginPath();
-                ctx.arc(keypoint.x, keypoint.y, 2, 0, 2 * Math.PI);
-                ctx.fill();
-            });
-            
-            // Draw face contour
-            ctx.strokeStyle = '#00FF00';
-            ctx.lineWidth = 1;
-            
-            // Draw facial features (eyes, nose, mouth)
-            const features = [
-                keypoints.slice(33, 46),    // Left eye
-                keypoints.slice(362, 375),  // Right eye
-                keypoints.slice(0, 17),     // Face contour
-            ];
-            
-            features.forEach(feature => {
-                ctx.beginPath();
-                ctx.moveTo(feature[0].x, feature[0].y);
-                feature.forEach((point, i) => {
-                    if (i > 0) ctx.lineTo(point.x, point.y);
-                });
-                if (feature.length > 2) ctx.closePath();
-                ctx.stroke();
-            });
-        });
-        updateStatus('Tracking face...');
-    } else {
-        updateStatus('No face detected');
     }
 }
 
@@ -170,22 +176,108 @@ async function detectFaces() {
     if (!detector || !video || !isTracking) return;
     
     try {
-        const predictions = await detector.estimateFaces(video);
-        drawFaceMesh(predictions);
+        if (video.readyState !== 4) {
+            requestAnimationFrame(detectFaces);
+            return;
+        }
+
+        const predictions = await detector.estimateFaces(video, {
+            flipHorizontal: true,
+            staticImageMode: false,
+            predictIrises: false
+        });
+        
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        
+        if (predictions.length > 0) {
+            predictions.forEach(prediction => {
+                const keypoints = prediction.keypoints;
+                
+                // Calculate face bounds to adjust scaling
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                keypoints.forEach(point => {
+                    minX = Math.min(minX, point.x);
+                    minY = Math.min(minY, point.y);
+                    maxX = Math.max(maxX, point.x);
+                    maxY = Math.max(maxY, point.y);
+                });
+                
+                const faceWidth = maxX - minX;
+                const faceHeight = maxY - minY;
+                const scaleFactor = 1.2; // Increase this to make the mesh bigger
+                
+                // Apply scaling to each point
+                const scaledPoints = keypoints.map(point => ({
+                    x: (point.x - minX) * scaleFactor + minX,
+                    y: (point.y - minY) * scaleFactor + minY
+                }));
+                
+                // Draw points
+                ctx.fillStyle = '#00FF00';
+                ctx.strokeStyle = '#00FF00';
+                ctx.lineWidth = 1.5; // Slightly thicker lines
+                
+                scaledPoints.forEach(point => {
+                    ctx.beginPath();
+                    ctx.arc(point.x, point.y, 2.5, 0, 2 * Math.PI); // Slightly larger points
+                    ctx.fill();
+                });
+                
+                // Draw face contours with scaled points
+                const contours = [
+                    scaledPoints.slice(0, 17),    // Jaw
+                    scaledPoints.slice(17, 22),   // Left eyebrow
+                    scaledPoints.slice(22, 27),   // Right eyebrow
+                    scaledPoints.slice(36, 42),   // Left eye
+                    scaledPoints.slice(42, 48),   // Right eye
+                    scaledPoints.slice(48, 60)    // Mouth outer
+                ];
+                
+                contours.forEach(contour => {
+                    ctx.beginPath();
+                    contour.forEach((point, i) => {
+                        if (i === 0) {
+                            ctx.moveTo(point.x, point.y);
+                        } else {
+                            ctx.lineTo(point.x, point.y);
+                        }
+                    });
+                    if (contour === contours[0]) {
+                        ctx.closePath();
+                    }
+                    ctx.stroke();
+                });
+            });
+            updateStatus('Face detected');
+        } else {
+            updateStatus('No face detected - try adjusting your position');
+        }
+        
+        ctx.restore();
+        
+        if (isTracking) {
+            requestAnimationFrame(detectFaces);
+        }
     } catch (error) {
         console.error('Error during face detection:', error);
-        updateStatus('Error during face detection');
-    }
-    
-    if (isTracking) {
-        requestAnimationFrame(detectFaces);
+        updateStatus('Error during face detection: ' + error.message);
+        if (isTracking) {
+            setTimeout(detectFaces, 1000);
+        }
     }
 }
 
-async function startTracking() {
+function startTracking() {
     if (!isTracking) {
         isTracking = true;
-        detectFaces();
+        console.log('Starting face tracking');
+        try {
+            detectFaces();
+        } catch (error) {
+            console.error('Error starting tracking:', error);
+            updateStatus('Error starting tracking: ' + error.message);
+        }
     }
 }
 
@@ -198,13 +290,20 @@ async function init() {
         await setupCamera();
         console.log('Camera setup complete');
         
-        setupCanvas();
+        canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
+        const WIDTH = 640;
+        const HEIGHT = 480;
+        video.width = WIDTH;
+        video.height = HEIGHT;
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        
+        await setupCanvas();
         console.log('Canvas setup complete');
         
         await setupFaceDetector();
         console.log('Face detector setup complete');
-        
-        startTracking();
     } catch (error) {
         console.error('Initialization error:', error);
         updateStatus('Error: ' + error.message);
