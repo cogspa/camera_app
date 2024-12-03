@@ -27,6 +27,17 @@ let faceOffsetY = 0;
 let handOffsetX = 0;
 let handOffsetY = 0;
 
+// Drawing functionality
+let isDrawing = false;
+let drawingCanvas;
+let drawingCtx;
+let currentColor = '#000000';
+let currentSize = 5;
+
+// Add background canvas variables
+let bgCanvas;
+let bgCtx;
+
 // Setup image upload handlers
 function setupImageUploads() {
     const faceInput = document.getElementById('faceOverlayUpload');
@@ -284,6 +295,10 @@ async function init() {
         await setupCamera();
         console.log('Camera setup complete');
         
+        // Add CSS variable for background image
+        document.documentElement.style.setProperty('--bg-image', 'none');
+        document.body.style.setProperty('background-image', 'var(--bg-image)');
+        
         canvas = document.getElementById('canvas');
         ctx = canvas.getContext('2d');
         const WIDTH = 640;
@@ -298,11 +313,15 @@ async function init() {
         
         setupImageUploads();
         setupOffsetControls();
-        console.log('Image upload handlers setup');
+        setupDrawingCanvas();
+        console.log('Controls setup complete');
         
         await setupFaceDetector();
         await initHandDetector();
         console.log('Face and hand detectors setup complete');
+        
+        // Start background update
+        requestAnimationFrame(updateBackground);
         
         startTracking();
     } catch (error) {
@@ -443,6 +462,66 @@ async function setupCanvas() {
     }
 }
 
+// Add background update function
+function posterize(imageData, levels) {
+    const data = imageData.data;
+    const step = Math.floor(255 / (levels - 1));
+    
+    for (let i = 0; i < data.length; i += 4) {
+        // Get grayscale value
+        const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const posterized = Math.round(gray / step) * step;
+        
+        // Apply pink and blue tinting based on brightness
+        if (posterized > 128) {
+            // Brighter areas get pink tint
+            data[i] = posterized + 50;     // R: increase red
+            data[i + 1] = posterized - 30;  // G: decrease green
+            data[i + 2] = posterized + 20;  // B: slight increase blue
+        } else {
+            // Darker areas get blue tint
+            data[i] = posterized - 30;      // R: decrease red
+            data[i + 1] = posterized - 30;  // G: decrease green
+            data[i + 2] = posterized + 50;  // B: increase blue
+        }
+    }
+    return imageData;
+}
+
+function updateBackground() {
+    if (!video || !isTracking) return;
+    
+    // Create a temporary canvas to capture the current video frame
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = video.width * 0.5;  // 50% of video width
+    tempCanvas.height = video.height * 0.5; // 50% of video height
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Draw the video frame at 50% size
+    tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+    
+    // Get image data for posterize effect
+    const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+    
+    // Apply posterize effect with pink and blue tinting
+    const processedImageData = posterize(imageData, 5); // 5 levels of posterization
+    
+    // Put the processed image data back
+    tempCtx.putImageData(processedImageData, 0, 0);
+    
+    // Convert the canvas to a data URL
+    const backgroundImage = tempCanvas.toDataURL();
+    
+    // Update the body's background
+    document.body.style.setProperty('--bg-image', `url(${backgroundImage})`);
+    
+    // Clean up
+    tempCanvas.remove();
+    
+    // Request next frame
+    requestAnimationFrame(updateBackground);
+}
+
 async function setupFaceDetector() {
     try {
         updateStatus('Loading face detection model...');
@@ -501,6 +580,8 @@ function cleanup() {
     if (handDetector) {
         handDetector.dispose();
     }
+    // Reset background
+    document.body.style.setProperty('--bg-image', 'none');
     tf.disposeVariables();
 }
 
@@ -535,4 +616,152 @@ function setupOffsetControls() {
     handOffsetYInput.addEventListener('input', (e) => {
         handOffsetY = parseInt(e.target.value) || 0;
     });
+}
+
+function setupDrawingCanvas() {
+    drawingCanvas = document.getElementById('drawingCanvas');
+    drawingCtx = drawingCanvas.getContext('2d', { alpha: true });
+    
+    // Clear with transparency
+    clearDrawing();
+    
+    // Setup drawing controls
+    const clearBtn = document.getElementById('clearDrawing');
+    const flipVertBtn = document.getElementById('flipVertical');
+    const flipHorizBtn = document.getElementById('flipHorizontal');
+    const useAsOverlayBtn = document.getElementById('useAsOverlay');
+    const colorPicker = document.getElementById('drawingColor');
+    const brushSize = document.getElementById('brushSize');
+    
+    // Drawing event listeners
+    drawingCanvas.addEventListener('mousedown', startDrawing);
+    drawingCanvas.addEventListener('mousemove', draw);
+    drawingCanvas.addEventListener('mouseup', stopDrawing);
+    drawingCanvas.addEventListener('mouseout', stopDrawing);
+    
+    drawingCanvas.addEventListener('pointerdown', startDrawing);
+    drawingCanvas.addEventListener('pointermove', draw);
+    drawingCanvas.addEventListener('pointerup', stopDrawing);
+    drawingCanvas.addEventListener('pointerout', stopDrawing);
+    
+    drawingCanvas.addEventListener('touchstart', (e) => e.preventDefault());
+    drawingCanvas.addEventListener('touchmove', (e) => e.preventDefault());
+    drawingCanvas.addEventListener('touchend', (e) => e.preventDefault());
+    
+    // Control event listeners
+    clearBtn.addEventListener('click', clearDrawing);
+    flipVertBtn.addEventListener('click', flipVertical);
+    flipHorizBtn.addEventListener('click', flipHorizontal);
+    useAsOverlayBtn.addEventListener('click', useDrawingAsOverlay);
+    colorPicker.addEventListener('input', (e) => currentColor = e.target.value);
+    brushSize.addEventListener('input', (e) => currentSize = parseInt(e.target.value));
+}
+
+function startDrawing(e) {
+    isDrawing = true;
+    draw(e); // Draw a single point on click/touch
+}
+
+function draw(e) {
+    if (!isDrawing) return;
+    
+    // Prevent scrolling
+    e.preventDefault();
+    
+    const rect = drawingCanvas.getBoundingClientRect();
+    let x, y;
+    
+    if (e.type.startsWith('touch')) {
+        x = e.touches[0].clientX - rect.left;
+        y = e.touches[0].clientY - rect.top;
+    } else if (e.type.startsWith('pointer')) {
+        x = e.clientX - rect.left;
+        y = e.clientY - rect.top;
+    } else {
+        x = e.clientX - rect.left;
+        y = e.clientY - rect.top;
+    }
+    
+    // Pressure sensitivity for pen input
+    let pressure = e.pressure !== undefined ? e.pressure : 1;
+    let size = currentSize * (pressure || 1);
+    
+    drawingCtx.fillStyle = currentColor;
+    drawingCtx.strokeStyle = currentColor;
+    drawingCtx.lineWidth = size;
+    
+    drawingCtx.lineTo(x, y);
+    drawingCtx.stroke();
+    drawingCtx.beginPath();
+    drawingCtx.arc(x, y, size/2, 0, Math.PI * 2);
+    drawingCtx.fill();
+    drawingCtx.beginPath();
+    drawingCtx.moveTo(x, y);
+}
+
+function stopDrawing(e) {
+    if (e) e.preventDefault();
+    isDrawing = false;
+    drawingCtx.beginPath(); // Start a new path for next drawing
+}
+
+function clearDrawing() {
+    // Clear the entire canvas with transparency
+    drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+    drawingCtx.beginPath();
+}
+
+function flipVertical() {
+    // Create a temporary canvas to store the flipped image
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = drawingCanvas.width;
+    tempCanvas.height = drawingCanvas.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Draw the current canvas content onto the temporary canvas, flipped
+    tempCtx.scale(1, -1);
+    tempCtx.translate(0, -drawingCanvas.height);
+    tempCtx.drawImage(drawingCanvas, 0, 0);
+    
+    // Clear the original canvas
+    drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+    
+    // Draw the flipped image back onto the original canvas
+    drawingCtx.drawImage(tempCanvas, 0, 0);
+    
+    // Clean up
+    tempCanvas.remove();
+}
+
+function flipHorizontal() {
+    // Create a temporary canvas
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = drawingCanvas.width;
+    tempCanvas.height = drawingCanvas.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Draw the current canvas content flipped horizontally
+    tempCtx.translate(tempCanvas.width, 0);
+    tempCtx.scale(-1, 1);
+    tempCtx.drawImage(drawingCanvas, 0, 0);
+    
+    // Clear original canvas
+    drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+    
+    // Draw the flipped image back
+    drawingCtx.drawImage(tempCanvas, 0, 0);
+    
+    // Clean up
+    tempCanvas.remove();
+}
+
+function useDrawingAsOverlay() {
+    // Create a new image from the drawing canvas
+    const drawingImage = new Image();
+    drawingImage.onload = () => {
+        faceOverlay = drawingImage;
+        updateStatus('Drawing set as face overlay');
+    };
+    // Explicitly use PNG format to preserve transparency
+    drawingImage.src = drawingCanvas.toDataURL('image/png');
 }
