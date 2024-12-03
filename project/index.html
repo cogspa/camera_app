@@ -1,29 +1,87 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Face Tracking App</title>
-    <link href="./src/style.css" rel="stylesheet">
-  </head>
-  <body>
-    <div class="min-h-screen bg-gray-900 text-white p-8">
-      <h1 class="text-3xl font-bold mb-6 text-center">Face Tracking Demo</h1>
-      <div class="max-w-3xl mx-auto">
-        <div class="mb-4 flex flex-col items-center">
-          <label for="camera-select" class="text-lg mb-2">Select Camera:</label>
-          <div id="camera-select-container"></div>
-        </div>
-        <div class="relative">
-          <video id="webcam" class="w-full rounded-lg" autoplay muted></video>
-          <canvas id="overlay" class="absolute top-0 left-0 w-full h-full"></canvas>
-        </div>
-        <div class="mt-4 flex justify-center gap-4">
-          <button id="startBtn" class="px-4 py-2 bg-green-600 rounded hover:bg-green-700">Start Tracking</button>
-          <button id="stopBtn" class="px-4 py-2 bg-red-600 rounded hover:bg-red-700" disabled>Stop Tracking</button>
-        </div>
-      </div>
+    <script type="module" src="./main.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a1a;
+            color: white;
+        }
+        .camera-select {
+            margin-bottom: 20px;
+            padding: 8px 16px;
+            font-size: 16px;
+            background: #2a2a2a;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 300px;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        .camera-select:hover {
+            background: #333;
+            border-color: #666;
+        }
+        .camera-select:focus {
+            border-color: #0088ff;
+            box-shadow: 0 0 0 2px rgba(0,136,255,0.2);
+        }
+        .camera-select option {
+            background: #2a2a2a;
+            color: white;
+            padding: 8px;
+        }
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 2px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+        .status {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 4px;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <select id="cameraSelect" class="camera-select">
+        <option value="">Loading cameras...</option>
+    </select>
+    <div class="status" id="status">Initializing camera...</div>
+    <div class="container">
+        <video id="video" playsinline autoplay></video>
+        <canvas id="canvas"></canvas>
     </div>
-    <script type="module" src="/src/main.js"></script>
-  </body>
+</body>
 </html>
