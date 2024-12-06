@@ -20,12 +20,18 @@ let handScale = 1.0;
 
 // Simplified drawing function without manual flipping
 function drawImageOnLandmarks(img, landmarks, scale) {
-    if (!img || !landmarks || landmarks.length < 2) return;
+    if (!img || !landmarks || landmarks.length < 2) {
+        console.log('Missing required data for overlay:', {
+            hasImage: !!img,
+            landmarksLength: landmarks?.length
+        });
+        return;
+    }
 
+    // Calculate bounding box
     let minX = Infinity, minY = Infinity;
     let maxX = -Infinity, maxY = -Infinity;
 
-    // Use raw coordinates since video and canvas are both flipped in CSS
     landmarks.forEach(point => {
         const x = point.x;
         const y = point.y;
@@ -35,19 +41,39 @@ function drawImageOnLandmarks(img, landmarks, scale) {
         maxY = Math.max(maxY, y);
     });
 
+    // Log bounding box coordinates for debugging
+    console.log('Bounding box:', { minX, minY, maxX, maxY });
+
     const width = (maxX - minX) * scale;
     const height = (maxY - minY) * scale;
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
 
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    ctx.drawImage(img, -width / 2, -height / 2, width, height);
-    ctx.restore();
+    console.log('Drawing dimensions:', { width, height, centerX, centerY, scale });
+
+    try {
+        // Draw a debug rectangle to show bounding box
+        ctx.save();
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+
+        // Draw the overlay image
+        ctx.translate(centerX, centerY);
+        ctx.drawImage(img, -width / 2, -height / 2, width, height);
+        ctx.restore();
+        
+        console.log('Overlay drawn successfully');
+    } catch (error) {
+        console.error('Error drawing overlay:', error);
+    }
 }
 
 async function detectFaces() {
-    if (!detector || !video || !canvas || !ctx || !isTracking) return;
+    if (!detector || !video || !canvas || !ctx || !isTracking) {
+        console.log('Detection skipped - missing components');
+        return;
+    }
     
     try {
         if (video.readyState !== 4) {
@@ -55,9 +81,16 @@ async function detectFaces() {
             return;
         }
 
-        // Since video is flipped in CSS, use flipHorizontal: true
+        // Log video dimensions for debugging
+        console.log('Video dimensions:', {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            canvasWidth: canvas.width,
+            canvasHeight: canvas.height
+        });
+
         const predictions = await detector.estimateFaces(video, {
-            flipHorizontal:false,
+            flipHorizontal: false,  // Changed to true since we're using CSS transform
             staticImageMode: false,
             predictIrises: false
         });
@@ -69,10 +102,10 @@ async function detectFaces() {
                 const keypoints = prediction.keypoints;
                 
                 if (faceOverlay) {
-                    // Use keypoints directly since video and canvas are both flipped
+                    console.log('Drawing face overlay with', keypoints.length, 'keypoints');
                     drawImageOnLandmarks(faceOverlay, keypoints, faceScale);
                 } else {
-                    // Draw keypoints directly
+                    // Draw keypoints for debugging
                     ctx.fillStyle = '#00FF00';
                     ctx.strokeStyle = '#00FF00';
                     ctx.lineWidth = 1.5;
@@ -84,9 +117,25 @@ async function detectFaces() {
                     });
                 }
             });
+        } else {
+            console.log('No faces detected');
         }
-        
-        // Handle hands the same way
+    } catch (error) {
+        console.error('Error in face detection:', error);
+    }
+    
+    requestAnimationFrame(detectFaces);
+}
+
+async function detectHands() {
+    if (!handDetector || !video || !canvas || !ctx || !isTracking) return;
+    
+    try {
+        if (video.readyState !== 4) {
+            requestAnimationFrame(detectHands);
+            return;
+        }
+
         const hands = await handDetector.estimateHands(video, {
             flipHorizontal: true
         });
@@ -110,13 +159,13 @@ async function detectFaces() {
         }
         
         if (isTracking) {
-            requestAnimationFrame(detectFaces);
+            requestAnimationFrame(detectHands);
         }
     } catch (error) {
         console.error('Error during detection:', error);
         updateStatus('Error during detection: ' + error.message);
         if (isTracking) {
-            setTimeout(detectFaces, 1000);
+            setTimeout(detectHands, 1000);
         }
     }
 }
@@ -149,6 +198,10 @@ async function init() {
         canvas.width = video.width;
         canvas.height = video.height;
         
+        // Setup image upload handlers
+        setupImageUploads();
+        console.log('Image upload handlers initialized');
+        
         // Load models in parallel
         updateStatus('Loading detection models...');
         const [faceModel, handModel] = await Promise.all([
@@ -162,6 +215,7 @@ async function init() {
         // Start tracking
         isTracking = true;
         detectFaces();
+        detectHands();
         
     } catch (error) {
         console.error('Initialization error:', error);
@@ -171,6 +225,8 @@ async function init() {
 
 // Setup image upload handlers
 function setupImageUploads() {
+    console.log('Setting up image uploads...');
+    
     const faceInput = document.getElementById('faceOverlayUpload');
     const handInput = document.getElementById('handOverlayUpload');
     const facePreview = document.getElementById('facePreview');
@@ -178,15 +234,36 @@ function setupImageUploads() {
     const faceScaleInput = document.getElementById('faceScale');
     const handScaleInput = document.getElementById('handScale');
 
+    if (!faceInput || !handInput || !facePreview || !handPreview) {
+        console.error('Missing required DOM elements for image uploads');
+        return;
+    }
+
     faceInput.addEventListener('change', async (e) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
             const img = new Image();
             img.src = URL.createObjectURL(file);
-            await new Promise(resolve => img.onload = resolve);
-            faceOverlay = img;
-            facePreview.src = img.src;
-            facePreview.style.display = 'block';
+            
+            try {
+                await new Promise((resolve, reject) => {
+                    img.onload = () => {
+                        console.log('Face overlay loaded:', {
+                            width: img.width,
+                            height: img.height,
+                            src: img.src
+                        });
+                        faceOverlay = img;
+                        facePreview.src = img.src;
+                        facePreview.style.display = 'block';
+                        resolve();
+                    };
+                    img.onerror = () => reject(new Error('Failed to load face overlay'));
+                });
+            } catch (error) {
+                console.error('Error loading face overlay:', error);
+                updateStatus('Error loading face overlay');
+            }
         }
     });
 
@@ -195,19 +272,33 @@ function setupImageUploads() {
             const file = e.target.files[0];
             const img = new Image();
             img.src = URL.createObjectURL(file);
-            await new Promise(resolve => img.onload = resolve);
-            handOverlay = img;
-            handPreview.src = img.src;
-            handPreview.style.display = 'block';
+            await new Promise(resolve => {
+                img.onload = () => {
+                    console.log('Hand overlay loaded:', img.width, 'x', img.height);
+                    handOverlay = img;
+                    handPreview.src = img.src;
+                    handPreview.style.display = 'block';
+                    resolve();
+                };
+                img.onerror = () => {
+                    console.error('Error loading hand overlay');
+                    updateStatus('Error loading hand overlay');
+                };
+            });
         }
     });
 
     faceScaleInput.addEventListener('input', (e) => {
-        faceScale = parseFloat(e.target.value);
+        const newScale = parseFloat(e.target.value);
+        if (!isNaN(newScale) && newScale > 0) {
+            faceScale = newScale;
+            console.log('Face scale updated:', faceScale);
+        }
     });
 
     handScaleInput.addEventListener('input', (e) => {
         handScale = parseFloat(e.target.value);
+        console.log('Hand scale updated:', handScale);
     });
 }
 
@@ -322,6 +413,7 @@ async function switchCamera(deviceId) {
         // Restart tracking
         isTracking = true;
         detectFaces();
+        detectHands();
         
         updateStatus('Camera switched successfully');
     } catch (error) {
