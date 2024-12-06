@@ -7,36 +7,12 @@
     <style>
         body {
             margin: 0;
-            padding: 0;
-            background-color: #1a1a1a;
+            padding: 20px;
+            background: #1a1a1a;
             color: white;
             font-family: Arial, sans-serif;
-            overflow: hidden;
         }
-
-        body::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            background-size: 50% 50%;  /* Make background video 50% size */
-            background-repeat: repeat;  /* Repeat the background */
-            opacity: 0.8;  /* Make it slightly transparent */
-            pointer-events: none;
-        }
-
         .container {
-            position: relative;
-            z-index: 1;
-            background: rgba(26, 26, 26, 0.7);
-            padding: 20px;
-            border-radius: 10px;
-            margin: 20px;
-        }
-        .video-container {
             position: relative;
             width: fit-content;
             margin: 0 auto;
@@ -109,101 +85,10 @@
             border-radius: 4px;
             color: white;
         }
-        .position-controls {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            margin: 5px 0;
-        }
-        
-        .position-controls input[type="number"] {
-            width: 60px;
-            padding: 4px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        
-        .control-group {
-            margin: 10px 0;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            background: rgba(255, 255, 255, 0.1);
-        }
-        
-        .drawing-container {
-            background: white;
-            padding: 10px;
-            border-radius: 8px;
-            margin: 10px 0;
-        }
-
-        #drawingCanvas {
-            border: 2px solid #333;
-            background: transparent;
-            cursor: crosshair;
-            margin-bottom: 10px;
-            touch-action: none; /* Prevents scrolling on touch devices */
-        }
-
-        .drawing-controls {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            margin-top: 10px;
-        }
-
-        .drawing-controls button {
-            padding: 5px 10px;
-            background: #444;
-            border: none;
-            border-radius: 4px;
-            color: white;
-            cursor: pointer;
-        }
-
-        .drawing-controls button:hover {
-            background: #555;
-        }
-
-        #drawingColor {
-            width: 50px;
-            height: 30px;
-            padding: 0;
-            border: none;
-        }
-
-        #brushSize {
-            width: 100px;
-        }
-        .background-canvas {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            pointer-events: none;
-        }
     </style>
 </head>
 <body>
     <div class="controls">
-        <div class="control-group">
-            <label>Drawing Canvas:</label>
-            <div class="drawing-container">
-                <canvas id="drawingCanvas" width="200" height="300"></canvas>
-                <div class="drawing-controls">
-                    <button id="clearDrawing">Clear</button>
-                    <button id="flipVertical">Flip Vertical</button>
-                    <button id="flipHorizontal">Flip Horizontal</button>
-                    <button id="useAsOverlay">Use as Face Overlay</button>
-                    <input type="color" id="drawingColor" value="#000000">
-                    <input type="range" id="brushSize" min="1" max="20" value="5">
-                    <span>Brush Size</span>
-                </div>
-            </div>
-        </div>
         <select id="cameraSelect" class="camera-select">
             <option value="">Loading cameras...</option>
         </select>
@@ -223,34 +108,11 @@
             </div>
         </div>
         
-        <div class="control-group">
-            <label>Face Overlay Position:</label>
-            <div class="position-controls">
-                <label>X Offset:</label>
-                <input type="number" id="faceOffsetX" value="0" step="1">
-                <label>Y Offset:</label>
-                <input type="number" id="faceOffsetY" value="0" step="1">
-            </div>
-        </div>
-        
-        <div class="control-group">
-            <label>Hand Overlay Position:</label>
-            <div class="position-controls">
-                <label>X Offset:</label>
-                <input type="number" id="handOffsetX" value="0" step="1">
-                <label>Y Offset:</label>
-                <input type="number" id="handOffsetY" value="0" step="1">
-            </div>
-        </div>
-        
         <div id="status">Loading...</div>
     </div>
-    
     <div class="container">
-        <div class="video-container">
-            <video id="video" playsinline></video>
-            <canvas id="canvas"></canvas>
-        </div>
+        <video id="video" width="640" height="480" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
     </div>
     
     <script type="module" src="/main.js"></script>
